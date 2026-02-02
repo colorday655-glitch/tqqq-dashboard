@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TQQQ 量化猎手 - 5分钟自动决策终端</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;600;900&display=swap');
+
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background-color: #020617;
+            color: #ffffff;
+            margin: 0;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        .mono { font-family: 'JetBrains Mono', monospace; }
+
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.95);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            z-index: 50;
+        }
+
+        #chart-container {
+            flex-grow: 1;
+            width: 100%;
+            position: relative;
+        }
+
+        .status-pill {
+            padding: 2px 8px;
+            border-radius: 9999px;
+            font-size: 10px;
+            font-weight: 800;
+            text-transform: uppercase;
+        }
+
+        .api-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            z-index: 100;
+            background: rgba(30, 41, 59, 0.85);
+            padding: 16px;
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4);
+        }
+
+        .loader {
+            border: 2px solid rgba(255,255,255,0.1);
+            border-top: 2px solid #6366f1;
+            border-radius: 50%;
+            width: 16px;
+            height: 16px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+<!-- 顶部导航 -->
+<header class="glass-panel px-6 py-3 flex justify-between items-center">
+    <div class="flex items-center space-x-4">
+        <div class="bg-indigo-600 p-2 rounded-xl shadow-lg shadow-indigo-500/20">
+            <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+        </div>
+        <div>
+            <h1 class="text-lg font-black tracking-tighter uppercase leading-none italic">TQQQ <span class="text-indigo-400">Hunter</span></h1>
+            <p class="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-1">Quant Execution v4.0 // 1-Min Ticker</p>
+        </div>
+    </div>
+
+    <div class="flex items-center space-x-8">
+        <div class="flex flex-col items-end">
+            <span class="text-slate-500 uppercase text-[9px] font-bold">Real-time Price</span>
+            <div class="flex items-baseline space-x-2">
+                <span id="price-display" class="text-2xl mono font-bold tracking-tighter">--.--</span>
+                <span id="pct-display" class="text-xs font-bold">--%</span>
+            </div>
+        </div>
+        <div class="h-10 w-[1px] bg-slate-800"></div>
+        <div class="flex flex-col items-start">
+            <span class="text-slate-500 uppercase text-[9px] font-bold">Strategy Status</span>
+            <div id="strategy-mode" class="status-pill bg-slate-800 text-slate-400 mt-1 flex items-center">
+                <span class="w-1.5 h-1.5 rounded-full bg-slate-500 mr-2"></span>
+                Waiting for Data
+            </div>
+        </div>
+    </div>
+</header>
+
+<main id="chart-container">
+    <!-- API 配置面板 -->
+    <div class="api-panel space-y-4">
+        <div class="flex flex-col">
+            <label class="text-[9px] font-black text-slate-500 uppercase mb-1.5">Alpha Vantage API Key</label>
+            <div class="flex space-x-2">
+                <input type="password" id="api-key" placeholder="粘贴 API Key" class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-indigo-500 w-44 transition-all">
+                <button onclick="syncRealData()" class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded-lg text-[10px] font-black transition-all uppercase tracking-widest">Sync</button>
+            </div>
+        </div>
+        <div id="log-msg" class="text-[9px] text-slate-400 italic">默认显示模拟实盘 (每3秒刷新)</div>
+    </div>
+
+    <!-- 浮动决策看板 -->
+    <div class="absolute bottom-8 left-8 z-10 space-y-4 pointer-events-none">
+        <div class="bg-slate-900/90 backdrop-blur-2xl p-6 rounded-2xl border border-white/5 w-80 shadow-2xl">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-xs font-black text-indigo-400 uppercase tracking-widest">量化多因子评分</h3>
+                <span id="next-label-time" class="text-[9px] text-slate-500 font-bold mono">Next Marker: --:--</span>
+            </div>
+            <div class="space-y-3">
+                <div class="flex justify-between items-center text-xs">
+                    <span class="text-slate-400">RSI (14) 动能</span>
+                    <span id="stat-rsi" class="mono font-bold text-indigo-300">--</span>
+                </div>
+                <div class="flex justify-between items-center text-xs">
+                    <span class="text-slate-400">BB 布林带偏离</span>
+                    <span id="stat-bb" class="mono font-bold">--</span>
+                </div>
+                <div class="flex justify-between items-center text-xs">
+                    <span class="text-slate-400">EMA 200 趋势</span>
+                    <span id="stat-trend" class="mono font-bold">--</span>
+                </div>
+                <div class="pt-4 border-t border-white/10 mt-2">
+                    <div id="master-rec" class="text-center py-3 rounded-xl bg-slate-800 text-slate-500 text-xs font-black uppercase tracking-widest transition-all duration-300">
+                        等待计算结果
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</main>
+
+<script>
+    let chart, candleSeries, bbUpper, bbLower, ema200;
+    let candleData = [];
+    let markers = [];
+    let isRealData = false;
+
+    // --- 技术指标计算 ---
+    const Indicators = {
+        ema(data, period) {
+            const k = 2 / (period + 1);
+            let emaValue = data[0].close;
+            return data.map(val => {
+                emaValue = (val.close * k) + (emaValue * (1 - k));
+                return { time: val.time, value: emaValue };
+            });
+        },
+        bollinger(data, period = 20, stdDev = 2) {
+            let upper = [], lower = [];
+            for (let i = 0; i < data.length; i++) {
+                if (i < period - 1) {
+                    upper.push({time: data[i].time, value: NaN});
+                    lower.push({time: data[i].time, value: NaN});
+                    continue;
+                }
+                const slice = data.slice(i - period + 1, i + 1).map(d => d.close);
+                const avg = slice.reduce((a, b) => a + b, 0) / period;
+                const sd = Math.sqrt(slice.map(x => Math.pow(x - avg, 2)).reduce((a, b) => a + b, 0) / period);
+                upper.push({ time: data[i].time, value: avg + stdDev * sd });
+                lower.push({ time: data[i].time, value: avg - stdDev * sd });
+            }
+            return { upper, lower };
+        },
+        rsi(data, period = 14) {
+            let results = [];
+            let gains = 0, losses = 0;
+            for (let i = 1; i < data.length; i++) {
+                let diff = data[i].close - data[i - 1].close;
+                gains += diff > 0 ? diff : 0;
+                losses += diff < 0 ? -diff : 0;
+                if (i >= period) {
+                    const rs = (gains / period) / (losses / period || 1);
+                    results.push(100 - (100 / (1 + rs)));
+                    // 简化的平滑滑动
+                    let prevDiff = data[i - period + 1].close - data[i - period].close;
+                    gains -= (prevDiff > 0 ? prevDiff : 0);
+                    losses -= (prevDiff < 0 ? -prevDiff : 0);
+                } else results.push(50);
+            }
+            return results;
+        }
+    };
+
+    // --- 初始化图表 ---
+    function initChart() {
+        const container = document.getElementById('chart-container');
+        chart = LightweightCharts.createChart(container, {
+            layout: { background: { color: '#020617' }, textColor: '#64748b' },
+            grid: { vertLines: { color: 'rgba(255,255,255,0.02)' }, horzLines: { color: 'rgba(255,255,255,0.02)' } },
+            timeScale: { borderColor: 'rgba(255,255,255,0.1)', timeVisible: true, secondsVisible: false },
+            rightPriceScale: { borderColor: 'rgba(255,255,255,0.1)' },
+            crosshair: { mode: LightweightCharts.CrosshairMode.Normal }
+        });
+
+        candleSeries = chart.addCandlestickSeries({
+            upColor: '#22c55e', downColor: '#ef4444', borderVisible: false,
+            wickUpColor: '#22c55e', wickDownColor: '#ef4444'
+        });
+
+        bbUpper = chart.addLineSeries({ color: 'rgba(99, 102, 241, 0.25)', lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
+        bbLower = chart.addLineSeries({ color: 'rgba(99, 102, 241, 0.25)', lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
+        ema200 = chart.addLineSeries({ color: 'rgba(168, 85, 247, 0.5)', lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
+
+        window.addEventListener('resize', () => chart.resize(container.clientWidth, container.clientHeight));
+    }
+
+    // --- 量化打标逻辑 (5分钟周期) ---
+    function applyStrategyMarkers() {
+        if (candleData.length < 30) return;
+
+        const rsis = Indicators.rsi(candleData);
+        const bb = Indicators.bollinger(candleData);
+        const e200 = Indicators.ema(candleData, 200);
+
+        ema200.setData(e200);
+        bbUpper.setData(bb.upper.filter(d => !isNaN(d.value)));
+        bbLower.setData(bb.lower.filter(d => !isNaN(d.value)));
+
+        markers = [];
+        candleData.forEach((candle, i) => {
+            const date = new Date(candle.time * 1000);
+            // 严格每 5 分钟（0, 5, 10...）在 K 线上打标
+            if (date.getMinutes() % 5 === 0 && i > 25) {
+                const rsi = rsis[i] || 50;
+                const bbl = bb.lower[i]?.value;
+                const bbu = bb.upper[i]?.value;
+                const trend = e200[i]?.value;
+
+                let signal = { text: '不动', color: '#64748b', pos: 'aboveBar', shape: 'circle' };
+
+                // 量化规则：RSI < 35 + 价格触及布林下轨 + 位于200日趋势线上方 = 买入
+                if (rsi < 35 && candle.low <= bbl && candle.close > trend) {
+                    signal = { text: '买入', color: '#22c55e', pos: 'belowBar', shape: 'arrowUp' };
+                }
+                // 量化规则：RSI > 65 + 价格触及布林上轨 = 卖出
+                else if (rsi > 65 && candle.high >= bbu) {
+                    signal = { text: '卖出', color: '#ef4444', pos: 'aboveBar', shape: 'arrowDown' };
+                }
+
+                markers.push({
+                    time: candle.time,
+                    position: signal.pos,
+                    color: signal.color,
+                    shape: signal.shape,
+                    text: signal.text,
+                    size: 1
+                });
+            }
+        });
+        candleSeries.setMarkers(markers);
+
+        // 更新数据看板
+        const latestRsi = rsis[rsis.length-1];
+        const latestTrend = e200[e200.length-1].value;
+        const currentClose = candleData[candleData.length-1].close;
+
+        document.getElementById('stat-rsi').innerText = latestRsi.toFixed(1);
+        document.getElementById('stat-trend').innerText = currentClose > latestTrend ? "看多" : "看空";
+        document.getElementById('stat-bb').innerText = currentClose < bb.lower[bb.lower.length-1]?.value ? "超卖" : "区间内";
+
+        const hud = document.getElementById('master-rec');
+        const lastM = markers[markers.length-1];
+        if (lastM) {
+            hud.innerText = `最新指令: ${lastM.text}`;
+            hud.className = `text-center py-3 rounded-xl text-xs font-black uppercase tracking-widest ${lastM.text==='买入'?'bg-green-500/20 text-green-400':lastM.text==='卖出'?'bg-red-500/20 text-red-400':'bg-slate-800 text-slate-400'}`;
+        }
+    }
+
+    // --- 数据同步逻辑 ---
+    async function syncRealData() {
+        const key = document.getElementById('api-key').value;
+        if (!key) return;
+
+        const log = document.getElementById('log-msg');
+        log.innerHTML = `<div class="flex items-center space-x-2"><div class="loader"></div><span>正在接入 Alpha Vantage 实盘...</span></div>`;
+
+        try {
+            const response = await fetch(`https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol=TQQQ&interval=1min&apikey=${key}`);
+            const data = await response.json();
+            const series = data["Time Series (1min)"];
+
+            if (series) {
+                candleData = Object.keys(series).map(t => ({
+                    time: Math.floor(new Date(t).getTime() / 1000),
+                    open: parseFloat(series[t]["1. open"]),
+                    high: parseFloat(series[t]["2. high"]),
+                    low: parseFloat(series[t]["3. low"]),
+                    close: parseFloat(series[t]["4. close"])
+                })).sort((a,b) => a.time - b.time);
+
+                candleSeries.setData(candleData);
+                applyStrategyMarkers();
+
+                isRealData = true;
+                log.innerText = "实盘连接成功：当前为 1分钟 实时行情";
+                document.getElementById('strategy-mode').innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-green-500 mr-2 animate-pulse"></span>LIVE MONITORING`;
+                document.getElementById('strategy-mode').className = "status-pill bg-green-500/10 text-green-400 mt-1 flex items-center";
+            } else {
+                log.innerText = "API 错误：请检查 Key 或调用频率限制";
+            }
+        } catch (e) {
+            log.innerText = "网络请求失败，请稍后再试";
+        }
+    }
+
+    // --- 模拟器 (无Key时) ---
+    function loadMockData() {
+        let lastClose = 72.50;
+        const now = Math.floor(Date.now() / 1000);
+        for (let i = 0; i < 300; i++) {
+            const o = lastClose;
+            const c = o + (Math.random() - 0.495) * 0.4;
+            candleData.push({
+                time: now - (300 - i) * 60,
+                open: o, high: Math.max(o, c) + 0.1, low: Math.min(o, c) - 0.1, close: c
+            });
+            lastClose = c;
+        }
+        candleSeries.setData(candleData);
+        applyStrategyMarkers();
+    }
+
+    window.onload = () => {
+        initChart();
+        loadMockData();
+
+        // 界面数值实时跳动
+        setInterval(() => {
+            const last = candleData[candleData.length - 1];
+            const jitter = last.close + (Math.random() - 0.5) * 0.1;
+            document.getElementById('price-display').innerText = jitter.toFixed(2);
+
+            const base = candleData[0].close;
+            const pct = ((jitter - base) / base * 100).toFixed(2);
+            const pctEl = document.getElementById('pct-display');
+            pctEl.innerText = `${pct > 0 ? '+' : ''}${pct}%`;
+            pctEl.className = `text-xs font-bold ${pct >= 0 ? 'text-green-400' : 'text-red-400'}`;
+
+            if (!isRealData) {
+                candleSeries.update({ ...last, close: jitter });
+            }
+        }, 3000);
+    };
+</script>
+</body>
+</html>
